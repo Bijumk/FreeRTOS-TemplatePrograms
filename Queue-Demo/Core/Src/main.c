@@ -36,7 +36,10 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+#define DEMO_TASK_STACK_SIZE        (configMINIMAL_STACK_SIZE * 2)
+#define DEMO_TASK_PRIORITY_LOW      (tskIDLE_PRIORITY + 1)
+#define DEMO_TASK_PRIORITY_NORMAL   (tskIDLE_PRIORITY + 2)
+#define DEMO_TASK_PRIORITY_HIGH     (tskIDLE_PRIORITY + 3)
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -132,6 +135,8 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
+  xSimpleQueue = xQueueCreate(5, sizeof(uint32_t));
+
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -139,6 +144,27 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  if (xSimpleQueue != NULL) {
+         printf("Queues created successfully");
+         printf("Simple Queue: 5 items of %u bytes each", sizeof(uint32_t));
+
+         /* Create tasks */
+         xTaskCreate(SenderTask, "Sender", DEMO_TASK_STACK_SIZE, NULL,
+                     DEMO_TASK_PRIORITY_NORMAL, &xSenderTaskHandle);
+
+         xTaskCreate(ReceiverTask, "Receiver", DEMO_TASK_STACK_SIZE, NULL,
+                     DEMO_TASK_PRIORITY_NORMAL, &xReceiverTaskHandle);
+
+         xTaskCreate(ButtonTask, "Button", DEMO_TASK_STACK_SIZE, NULL,
+                     DEMO_TASK_PRIORITY_LOW, &xButtonTaskHandle);
+
+         printf("All tasks created. Starting scheduler...");
+
+         /* Start the scheduler */
+         vTaskStartScheduler();
+     } else {
+         printf("Failed to create queues. Out of memory?");
+     }
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -287,13 +313,11 @@ static void SenderTask(void *pvParameters)
                        ulValueToSend, ulMessagesSent);
 
             /* Toggle green LED to show sending activity */
-            BSP_LED_Toggle(LED_GREEN);
+            HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
         } else {
             printf("Sender: Failed to send value %lu (Queue full?)", ulValueToSend);
         }
 
-        /* Update display */
-        UpdateLCDDisplay();
 
         vTaskDelay(pdMS_TO_TICKS(800));
     }
@@ -317,7 +341,7 @@ static void ReceiverTask(void *pvParameters)
                        ulReceivedValue, ulMessagesReceived);
 
             /* Toggle red LED to show receiving activity */
-            /* TODO *
+            /* TODO */
 
             /* Simulate processing time */
             vTaskDelay(pdMS_TO_TICKS(200));
@@ -334,22 +358,16 @@ static void ButtonTask(void *pvParameters)
 
     for (;;) {
         /* Check if button is pressed */
-        if (BSP_PB_GetState(BUTTON_KEY) == GPIO_PIN_SET) {
+        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
             /* Display queue status */
             printf("=== Queue Status ===");
-            printf("Simple Queue: %u/%u items",
-                       uxQueueMessagesWaiting(xSimpleQueue),
-                       uxQueueGetQueueLength(xSimpleQueue));
-            printf("Struct Queue: %u/%u items",
-                       uxQueueMessagesWaiting(xStructQueue),
-                       uxQueueGetQueueLength(xStructQueue));
-            printf("Simple Queue free spaces: %u",
-                       uxQueueSpacesAvailable(xSimpleQueue));
-            printf("Struct Queue free spaces: %u",
-                       uxQueueSpacesAvailable(xStructQueue));
+            printf("Simple Queue: %lu items", uxQueueMessagesWaiting(xSimpleQueue));
+
+            printf("Simple Queue free spaces: %lu", uxQueueSpacesAvailable(xSimpleQueue));
+
 
             /* Wait for button release */
-            while (BSP_PB_GetState(BUTTON_KEY) == GPIO_PIN_SET) {
+            while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
         }
@@ -372,7 +390,7 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+	  vTaskDelay(pdMS_TO_TICKS(1));
   }
   /* USER CODE END 5 */
 }
