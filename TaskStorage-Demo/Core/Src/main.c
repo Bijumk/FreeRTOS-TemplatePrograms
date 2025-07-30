@@ -18,7 +18,6 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -44,13 +43,21 @@
 UART_HandleTypeDef huart1;
 
 /* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
+
 /* USER CODE BEGIN PV */
+/* Task handles */
+TaskHandle_t xTask1Handle = NULL;
+TaskHandle_t xTask2Handle = NULL;
+
+/* TLS index (can be shared across tasks if they use different data types or purposes) */
+static BaseType_t xTLSIndex = 0;
+
+/* Structure to hold task-specific data */
+typedef struct {
+    uint32_t ulTaskID;
+    uint32_t ulCounter;
+    char pcTaskName[20];
+} TaskData_t;
 
 /* USER CODE END PV */
 
@@ -61,12 +68,16 @@ static void MX_USART1_UART_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+static void TlsDemoTask(void *pvParameters);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+int _write(int file, char *data, int len)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t*)data, len, HAL_MAX_DELAY);
+    return len;
+}
 /* USER CODE END 0 */
 
 /**
@@ -104,7 +115,6 @@ int main(void)
   /* USER CODE END 2 */
 
   /* Init scheduler */
-  osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -124,10 +134,40 @@ int main(void)
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  printf("=== FreeRTOS Thread Local Storage Demonstration ===\r\n");
+      printf("STM32F429I Discovery Board\r\n");
+      printf("FreeRTOS Version: %s\r\n", tskKERNEL_VERSION_NUMBER);
+
+      /* Create TLS index (only needs to be done once) */
+      xTLSIndex = 0; /* Using index 0 for this demo */
+
+      /* Create tasks that will use TLS */
+      xTaskCreate(
+          TlsDemoTask,            /* Task function */
+          "TlsTask1",             /* Task name */
+          configMINIMAL_STACK_SIZE, /* Stack size */
+          (void*)1,               /* Parameter: Task ID 1 */
+          tskIDLE_PRIORITY + 1,   /* Task priority */
+          &xTask1Handle           /* Task handle */
+      );
+
+      xTaskCreate(
+          TlsDemoTask,            /* Task function */
+          "TlsTask2",             /* Task name */
+          configMINIMAL_STACK_SIZE, /* Stack size */
+          (void*)2,               /* Parameter: Task ID 2 */
+          tskIDLE_PRIORITY + 1,   /* Task priority */
+          &xTask2Handle           /* Task handle */
+      );
+
+
+      printf("All tasks created successfully. Starting scheduler...\r\n");
+
+      /* Start the scheduler */
+      vTaskStartScheduler();
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -135,7 +175,6 @@ int main(void)
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
-  osKernelStart();
 
   /* We should never get here as control is now taken by the scheduler */
 
@@ -267,6 +306,51 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+ * @brief TLS Demo Task - Uses Thread Local Storage to store and retrieve task-specific data
+ * @param pvParameters: Task parameters (Task ID)
+ */
+static void TlsDemoTask(void *pvParameters)
+{
+    TaskData_t *pxTaskData;
+    uint32_t ulTaskID = (uint32_t)pvParameters;
+
+    /* Allocate memory for task-specific data */
+    pxTaskData = (TaskData_t *)pvPortMalloc(sizeof(TaskData_t));
+    if (pxTaskData == NULL) {
+        printf("Task %lu: Failed to allocate memory for TLS data!\r\n", ulTaskID);
+        vTaskDelete(NULL); /* Delete this task if memory allocation fails */
+    }
+
+    /* Initialize task-specific data */
+    pxTaskData->ulTaskID = ulTaskID;
+    pxTaskData->ulCounter = 0;
+    sprintf(pxTaskData->pcTaskName, "Task%lu", ulTaskID);
+
+    /* Store the pointer to task-specific data in TLS */
+    vTaskSetThreadLocalStoragePointer(NULL, xTLSIndex, pxTaskData);
+
+    printf("%s: Started. Initializing TLS with ID %lu.\r\n", pxTaskData->pcTaskName, pxTaskData->ulTaskID);
+
+    for (;;) {
+        /* Retrieve task-specific data from TLS */
+        pxTaskData = (TaskData_t *)pvTaskGetThreadLocalStoragePointer(NULL, xTLSIndex);
+
+        pxTaskData->ulCounter++;
+
+        printf("%s: Counter = %lu, TLS ID = %lu\r\n",
+               pxTaskData->pcTaskName, pxTaskData->ulCounter, pxTaskData->ulTaskID);
+
+        /* Toggle LED based on task ID */
+        if (pxTaskData->ulTaskID == 1) {
+        	HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_13);
+        } else {
+        	HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_14);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
 
 /* USER CODE END 4 */
 
@@ -283,7 +367,7 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+	  vTaskDelay(pdMS_TO_TICKS(1));
   }
   /* USER CODE END 5 */
 }

@@ -18,7 +18,6 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -44,14 +43,16 @@
 UART_HandleTypeDef huart1;
 
 /* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* USER CODE BEGIN PV */
 
+/* USER CODE BEGIN PV */
+/* Task handles */
+TaskHandle_t xSuspendableTaskHandle = NULL;
+TaskHandle_t xDeletableTaskHandle = NULL;
+TaskHandle_t xControlTaskHandle = NULL;
+
+/* Counters */
+static volatile uint32_t ulSuspendableTaskCounter = 0;
+static volatile uint32_t ulDeletableTaskCounter = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -61,12 +62,19 @@ static void MX_USART1_UART_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+/* Function prototypes */
+static void SuspendableTask(void *pvParameters);
+static void DeletableTask(void *pvParameters);
+static void ControlTask(void *pvParameters);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+int _write(int file, char *data, int len)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t*)data, len, HAL_MAX_DELAY);
+    return len;
+}
 /* USER CODE END 0 */
 
 /**
@@ -104,7 +112,6 @@ int main(void)
   /* USER CODE END 2 */
 
   /* Init scheduler */
-  osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -124,10 +131,45 @@ int main(void)
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  printf("=== FreeRTOS Task Control Demonstration ===\r\n");
+      printf("STM32F429I Discovery Board\r\n");
+      printf("FreeRTOS Version: %s\r\n", tskKERNEL_VERSION_NUMBER);
+
+      /* Create tasks */
+      xTaskCreate(
+          SuspendableTask,        /* Task function */
+          "Suspendable",          /* Task name */
+          configMINIMAL_STACK_SIZE, /* Stack size */
+          NULL,                   /* Parameters to pass to the task */
+          tskIDLE_PRIORITY + 1,   /* Task priority */
+          &xSuspendableTaskHandle /* Task handle */
+      );
+
+      xTaskCreate(
+          DeletableTask,          /* Task function */
+          "Deletable",            /* Task name */
+          configMINIMAL_STACK_SIZE, /* Stack size */
+          NULL,                   /* Parameters to pass to the task */
+          tskIDLE_PRIORITY + 1,   /* Task priority */
+          &xDeletableTaskHandle   /* Task handle */
+      );
+
+      xTaskCreate(
+          ControlTask,            /* Task function */
+          "Control",              /* Task name */
+          configMINIMAL_STACK_SIZE * 2, /* Stack size */
+          NULL,                   /* Parameters to pass to the task */
+          tskIDLE_PRIORITY + 2,   /* Higher priority for control */
+          &xControlTaskHandle     /* Task handle */
+      );
+
+      printf("All tasks created successfully. Starting scheduler...\r\n");
+
+      /* Start the scheduler */
+      vTaskStartScheduler();
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -135,7 +177,6 @@ int main(void)
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
-  osKernelStart();
 
   /* We should never get here as control is now taken by the scheduler */
 
@@ -268,6 +309,92 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+/**
+ * @brief Suspendable Task - Toggles LED and can be suspended/resumed
+ * @param pvParameters: Task parameters (unused)
+ */
+static void SuspendableTask(void *pvParameters)
+{
+    (void)pvParameters; /* Suppress unused parameter warning */
+
+    printf("Suspendable Task: Started\r\n");
+
+    for (;;) {
+        ulSuspendableTaskCounter++;
+        HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_13); /* Toggle Green LED */
+        printf("Suspendable Task: Running (Count: %lu)\r\n", ulSuspendableTaskCounter);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+/**
+ * @brief Deletable Task - Toggles LED and can be deleted
+ * @param pvParameters: Task parameters (unused)
+ */
+static void DeletableTask(void *pvParameters)
+{
+    (void)pvParameters; /* Suppress unused parameter warning */
+
+    printf("Deletable Task: Started\r\n");
+
+    for (;;) {
+        ulDeletableTaskCounter++;
+        HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_14);; /* Toggle Red LED */
+        printf("Deletable Task: Running (Count: %lu)\r\n", ulDeletableTaskCounter);
+        vTaskDelay(pdMS_TO_TICKS(700));
+    }
+}
+
+/**
+ * @brief Control Task - Controls the state of other tasks based on button presses
+ * @param pvParameters: Task parameters (unused)
+ */
+static void ControlTask(void *pvParameters)
+{
+    (void)pvParameters; /* Suppress unused parameter warning */
+    static uint8_t control_state = 0;
+
+    printf("Control Task: Started. Press button to control tasks.\r\n");
+
+    for (;;) {
+        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
+            /* Debounce */
+            vTaskDelay(pdMS_TO_TICKS(50));
+            while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+
+            control_state++;
+
+            switch (control_state) {
+                case 1:
+                    if (xSuspendableTaskHandle != NULL) {
+                        vTaskSuspend(xSuspendableTaskHandle);
+                        printf("Control Task: Suspendable Task SUSPENDED.\r\n");
+                    }
+                    break;
+                case 2:
+                    if (xSuspendableTaskHandle != NULL) {
+                        vTaskResume(xSuspendableTaskHandle);
+                        printf("Control Task: Suspendable Task RESUMED.\r\n");
+                    }
+                    break;
+                case 3:
+                    if (xDeletableTaskHandle != NULL) {
+                        vTaskDelete(xDeletableTaskHandle);
+                        xDeletableTaskHandle = NULL; /* Clear handle after deletion */
+                        printf("Control Task: Deletable Task DELETED.\r\n");
+                    }
+                    break;
+                default:
+                    printf("Control Task: Resetting demo. Restarting...\r\n");
+                    HAL_NVIC_SystemReset(); /* Reset system to restart demo */
+                    break;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */

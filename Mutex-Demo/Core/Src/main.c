@@ -44,14 +44,13 @@
 UART_HandleTypeDef huart1;
 
 /* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* USER CODE BEGIN PV */
 
+/* USER CODE BEGIN PV */
+/* Mutex handle */
+SemaphoreHandle_t xMutex;
+
+/* Shared resource access counter */
+static volatile uint32_t ulSharedResourceAccessCount = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -61,12 +60,17 @@ static void MX_USART1_UART_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+/* Function prototypes */
+static void MutexTask(void *pvParameters);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+int _write(int file, char *data, int len)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t*)data, len, HAL_MAX_DELAY);
+    return len;
+}
 /* USER CODE END 0 */
 
 /**
@@ -104,7 +108,6 @@ int main(void)
   /* USER CODE END 2 */
 
   /* Init scheduler */
-  osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -124,10 +127,45 @@ int main(void)
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  printf("=== FreeRTOS Mutex Demonstration ===\r\n");
+      printf("STM32F429I Discovery Board\r\n");
+
+      /* Create a mutex. Mutexes are binary semaphores with priority inheritance. */
+      xMutex = xSemaphoreCreateMutex();
+
+      if (xMutex != NULL) {
+          printf("Mutex created successfully.\r\n");
+
+          /* Create two tasks that will compete for the shared resource */
+          xTaskCreate(
+              MutexTask,              /* Task function */
+              "MutexTask1",           /* Task name */
+              configMINIMAL_STACK_SIZE, /* Stack size */
+              (void*)1,               /* Parameters: Task ID 1 */
+              tskIDLE_PRIORITY + 1,   /* Task priority */
+              NULL                    /* Task handle (not needed for this demo) */
+          );
+
+          xTaskCreate(
+              MutexTask,              /* Task function */
+              "MutexTask2",           /* Task name */
+              configMINIMAL_STACK_SIZE, /* Stack size */
+              (void*)2,               /* Parameters: Task ID 2 */
+              tskIDLE_PRIORITY + 1,   /* Task priority */
+              NULL                    /* Task handle (not needed for this demo) */
+          );
+
+          printf("Mutex tasks created. Starting scheduler...\r\n");
+
+          /* Start the scheduler */
+          vTaskStartScheduler();
+      } else {
+          printf("Failed to create mutex. Out of memory?\r\n");
+      }
+
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -135,7 +173,6 @@ int main(void)
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
-  osKernelStart();
 
   /* We should never get here as control is now taken by the scheduler */
 
@@ -267,7 +304,45 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+ * @brief Mutex Task - Demonstrates mutex usage to protect a shared resource
+ * @param pvParameters: Task parameters (task ID)
+ */
+static void MutexTask(void *pvParameters)
+{
+    uint32_t ulTaskID = (uint32_t)pvParameters;
+    char pcTaskName[20];
 
+    sprintf(pcTaskName, "MutexTask%lu", ulTaskID);
+    printf("%s: Started\r\n", pcTaskName);
+
+    for (;;) {
+        /* Attempt to take the mutex. Block indefinitely until it's available. */
+        if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE) {
+            /* Mutex successfully taken, now access the shared resource */
+            ulSharedResourceAccessCount++;
+
+            printf("%s: Accessing shared resource. Count: %lu\r\n",
+                   pcTaskName, ulSharedResourceAccessCount);
+
+            /* Simulate work on the shared resource */
+            vTaskDelay(pdMS_TO_TICKS(50));
+
+            /* Give the mutex back, allowing other tasks to access the resource */
+            xSemaphoreGive(xMutex);
+
+            /* Toggle LED to show activity */
+            if (ulTaskID == 1) {
+            	HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_13);
+            } else {
+            	HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_14);
+            }
+        }
+
+        /* Introduce a small delay to allow other tasks to run */
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
