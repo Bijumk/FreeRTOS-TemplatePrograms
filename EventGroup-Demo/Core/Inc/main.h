@@ -31,7 +31,18 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+/* Standard includes */
+#include <stdio.h>
+#include <string.h>
+#include <math.h> /* For log2 in EventSetterTask name generation */
 
+/* STM32 HAL includes */
+#include "stm32f4xx_hal.h"
+
+/* FreeRTOS includes */
+#include "FreeRTOS.h"
+#include "task.h"
+#include "event_groups.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/

@@ -18,7 +18,6 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -37,20 +36,25 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+/* Event bits definitions */
+#define EVENT_BIT_0     (1UL << 0)  /* Event from Task 1 */
+#define EVENT_BIT_1     (1UL << 1)  /* Event from Task 2 */
+#define EVENT_BIT_2     (1UL << 2)  /* Event from Task 3 */
+#define EVENT_BIT_BUTTON (1UL << 3) /* Event from Button */
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart1;
 
 /* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
+
 /* USER CODE BEGIN PV */
+/* Event Group handle */
+EventGroupHandle_t xEventGroup;
+
+/* Counters */
+static volatile uint32_t ulEventsSet = 0;
+static volatile uint32_t ulEventsWaited = 0;
 
 /* USER CODE END PV */
 
@@ -61,12 +65,19 @@ static void MX_USART1_UART_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+/* Function prototypes */
+static void EventSetterTask(void *pvParameters);
+static void EventWaiterTask(void *pvParameters);
+static void ButtonTask(void *pvParameters);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+int _write(int file, char *data, int len)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t*)data, len, HAL_MAX_DELAY);
+    return len;
+}
 /* USER CODE END 0 */
 
 /**
@@ -100,11 +111,14 @@ int main(void)
   MX_GPIO_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  /* Create the event group */
+   xEventGroup = xEventGroupCreate();
 
+   if (xEventGroup != NULL) {
+       printf("Event Group created successfully.\r\n");
   /* USER CODE END 2 */
 
   /* Init scheduler */
-  osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -124,10 +138,69 @@ int main(void)
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  printf("=== FreeRTOS Event Group Demonstration ===\r\n");
+      printf("STM32F429I Discovery Board\r\n");
+
+
+
+          /* Create event setter tasks */
+          xTaskCreate(
+              EventSetterTask,        /* Task function */
+              "Setter1",              /* Task name */
+              configMINIMAL_STACK_SIZE, /* Stack size */
+              (void*)EVENT_BIT_0,     /* Parameters: Event Bit 0 */
+              tskIDLE_PRIORITY + 1,   /* Task priority */
+              NULL                    /* Task handle */
+          );
+
+          xTaskCreate(
+              EventSetterTask,        /* Task function */
+              "Setter2",              /* Task name */
+              configMINIMAL_STACK_SIZE, /* Stack size */
+              (void*)EVENT_BIT_1,     /* Parameters: Event Bit 1 */
+              tskIDLE_PRIORITY + 1,   /* Task priority */
+              NULL                    /* Task handle */
+          );
+
+          xTaskCreate(
+              EventSetterTask,        /* Task function */
+              "Setter3",              /* Task name */
+              configMINIMAL_STACK_SIZE, /* Stack size */
+              (void*)EVENT_BIT_2,     /* Parameters: Event Bit 2 */
+              tskIDLE_PRIORITY + 1,   /* Task priority */
+              NULL                    /* Task handle */
+          );
+
+          /* Create event waiter task */
+          xTaskCreate(
+              EventWaiterTask,        /* Task function */
+              "Waiter",               /* Task name */
+              configMINIMAL_STACK_SIZE, /* Stack size */
+              NULL,                   /* Parameters to pass to the task */
+              tskIDLE_PRIORITY + 2,   /* Higher priority for waiting */
+              NULL                    /* Task handle */
+          );
+
+          /* Create button task */
+          xTaskCreate(
+              ButtonTask,             /* Task function */
+              "Button",               /* Task name */
+              configMINIMAL_STACK_SIZE, /* Stack size */
+              NULL,                   /* Parameters to pass to the task */
+              tskIDLE_PRIORITY + 2,   /* Higher priority for button */
+              NULL                    /* Task handle */
+          );
+
+          printf("All tasks created. Starting scheduler...\r\n");
+
+          /* Start the scheduler */
+          vTaskStartScheduler();
+      } else {
+          printf("Failed to create event group. Out of memory?\r\n");
+      }
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -135,7 +208,6 @@ int main(void)
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
-  osKernelStart();
 
   /* We should never get here as control is now taken by the scheduler */
 
@@ -267,6 +339,102 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+ * @brief Event Setter Task - Sets a specific event bit in the event group
+ * @param pvParameters: Task parameters (event bit to set)
+ */
+static void EventSetterTask(void *pvParameters)
+{
+    const EventBits_t xEventBitToSet = (EventBits_t)pvParameters;
+    char pcTaskName[20];
+
+    sprintf(pcTaskName, "Setter%lu", (uint32_t)log2(xEventBitToSet) + 1);
+    printf("%s: Started - setting event bit 0x%lx\r\n", pcTaskName, xEventBitToSet);
+
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(2000 + (xEventBitToSet * 100))); /* Vary delay slightly */
+
+        /* Set the event bit */
+        xEventGroupSetBits(xEventGroup, xEventBitToSet);
+        ulEventsSet++;
+        printf("%s: Set event bit 0x%lx (Total set: %lu)\r\n", pcTaskName, xEventBitToSet, ulEventsSet);
+
+        /* Toggle LED based on task */
+        if (xEventBitToSet == EVENT_BIT_0) {
+        	HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_13);
+        } else if (xEventBitToSet == EVENT_BIT_1) {
+        	HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_14);
+        }
+    }
+}
+
+/**
+ * @brief Event Waiter Task - Waits for a combination of event bits
+ * @param pvParameters: Task parameters (unused)
+ */
+static void EventWaiterTask(void *pvParameters)
+{
+    (void)pvParameters; /* Suppress unused parameter warning */
+    const EventBits_t xBitsToWaitFor = EVENT_BIT_0 | EVENT_BIT_1 | EVENT_BIT_2 | EVENT_BIT_BUTTON;
+    EventBits_t xReceivedEvents;
+
+    printf("Waiter Task: Started - waiting for events 0x%lx\r\n", xBitsToWaitFor);
+
+    for (;;) {
+        /* Wait for all specified bits to be set. Clear them on exit. */
+        xReceivedEvents = xEventGroupWaitBits(
+                                xEventGroup,        /* The event group being tested. */
+                                xBitsToWaitFor,     /* The bits to wait for. */
+                                pdTRUE,             /* Clear bits before returning. */
+                                pdTRUE,             /* Wait for all bits to be set. */
+                                portMAX_DELAY );    /* Wait indefinitely. */
+
+        if ((xReceivedEvents & xBitsToWaitFor) == xBitsToWaitFor) {
+            ulEventsWaited++;
+            printf("Waiter: ALL required events (0x%lx) received! (Total waited: %lu)\r\n",
+                   xReceivedEvents, ulEventsWaited);
+
+            /* Indicate success with LEDs */
+            HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_13);
+            HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_14);
+            HAL_Delay(500);
+            HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_13);
+            HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_14);
+        } else {
+            printf("Waiter: Received events 0x%lx, but not all required bits (0x%lx) were set.\r\n",
+                   xReceivedEvents, xBitsToWaitFor);
+        }
+    }
+}
+
+/**
+ * @brief Button Task - Sets a specific event bit when button is pressed
+ * @param pvParameters: Task parameters (unused)
+ */
+static void ButtonTask(void *pvParameters)
+{
+    (void)pvParameters; /* Suppress unused parameter warning */
+
+    printf("Button Task: Started - Press button to set EVENT_BIT_BUTTON\r\n");
+
+    for (;;) {
+        /* Check if button is pressed */
+        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
+            /* Set the button event bit */
+            xEventGroupSetBits(xEventGroup, EVENT_BIT_BUTTON);
+            ulEventsSet++;
+            printf("Button: Set EVENT_BIT_BUTTON (0x%lx) (Total set: %lu)\r\n",
+                   EVENT_BIT_BUTTON, ulEventsSet);
+
+            /* Wait for button release */
+            while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
 
 /* USER CODE END 4 */
 
@@ -283,7 +451,6 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
   }
   /* USER CODE END 5 */
 }

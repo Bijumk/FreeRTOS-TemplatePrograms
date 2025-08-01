@@ -37,20 +37,22 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+/* Buffer size */
+#define MESSAGE_BUFFER_SIZE     256
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart1;
 
 /* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
+
 /* USER CODE BEGIN PV */
+/* Message Buffer handle */
+MessageBufferHandle_t xMessageBuffer;
+
+/* Counters */
+static volatile uint32_t ulMessagesSent = 0;
+static volatile uint32_t ulMessagesReceived = 0;
 
 /* USER CODE END PV */
 
@@ -61,12 +63,18 @@ static void MX_USART1_UART_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+/* Function prototypes */
+static void MessageSenderTask(void *pvParameters);
+static void MessageReceiverTask(void *pvParameters);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+int _write(int file, char *data, int len)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t*)data, len, HAL_MAX_DELAY);
+    return len;
+}
 /* USER CODE END 0 */
 
 /**
@@ -100,11 +108,11 @@ int main(void)
   MX_GPIO_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  /* Create message buffer */
+  xMessageBuffer = xMessageBufferCreate(MESSAGE_BUFFER_SIZE);
   /* USER CODE END 2 */
 
   /* Init scheduler */
-  osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -124,10 +132,43 @@ int main(void)
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
+  printf("=== FreeRTOS Message Buffer Demonstration ===\r\n");
+      printf("STM32F429I Discovery Board\r\n");
+
+
+
+      if (xMessageBuffer != NULL) {
+          printf("Message Buffer created successfully: %u bytes\r\n", (unsigned int)MESSAGE_BUFFER_SIZE);
+
+          /* Create tasks */
+          xTaskCreate(
+              MessageSenderTask,      /* Task function */
+              "MsgSender",            /* Task name */
+              configMINIMAL_STACK_SIZE, /* Stack size */
+              NULL,                   /* Parameters to pass to the task */
+              tskIDLE_PRIORITY + 1,   /* Task priority */
+              NULL                    /* Task handle */
+          );
+
+          xTaskCreate(
+              MessageReceiverTask,    /* Task function */
+              "MsgReceiver",          /* Task name */
+              configMINIMAL_STACK_SIZE, /* Stack size */
+              NULL,                   /* Parameters to pass to the task */
+              tskIDLE_PRIORITY + 1,   /* Task priority */
+              NULL                    /* Task handle */
+          );
+
+          printf("All tasks created. Starting scheduler...\r\n");
+
+          /* Start the scheduler */
+          vTaskStartScheduler();
+      } else {
+          printf("Failed to create message buffer. Out of memory?\r\n");
+      }
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -267,6 +308,77 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+ * @brief Message Sender Task - Sends discrete messages to message buffer
+ * @param pvParameters: Task parameters (unused)
+ */
+static void MessageSenderTask(void *pvParameters)
+{
+    (void)pvParameters; /* Suppress unused parameter warning */
+    char pcMessage[50];
+    uint32_t ulMessageNumber = 0;
+    size_t xMessageLength;
+
+    printf("Message Sender Task: Started\r\n");
+
+    for (;;) {
+        /* Create a message */
+        ulMessageNumber++;
+        sprintf(pcMessage, "Message #%lu from sender task", ulMessageNumber);
+        xMessageLength = strlen(pcMessage);
+
+        /* Send message to message buffer */
+        if (xMessageBufferSend(xMessageBuffer,
+                              (void*)pcMessage,
+                              xMessageLength,
+                              pdMS_TO_TICKS(100)) == xMessageLength) {
+            ulMessagesSent++;
+            printf("Message Sender: Sent message #%lu (Total: %lu)\r\n",
+                   ulMessageNumber, ulMessagesSent);
+
+            /* Toggle green LED to show activity */
+            HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_13);
+        } else {
+            printf("Message Sender: Failed to send message #%lu (buffer full?)\r\n", ulMessageNumber);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1500));
+    }
+}
+
+/**
+ * @brief Message Receiver Task - Receives discrete messages from message buffer
+ * @param pvParameters: Task parameters (unused)
+ */
+static void MessageReceiverTask(void *pvParameters)
+{
+    (void)pvParameters; /* Suppress unused parameter warning */
+    char pcReceivedMessage[100];
+    size_t xMessageLength;
+
+    printf("Message Receiver Task: Started - waiting for messages...\r\n");
+
+    for (;;) {
+        /* Receive message from message buffer */
+        xMessageLength = xMessageBufferReceive(xMessageBuffer,
+                                              (void*)pcReceivedMessage,
+                                              sizeof(pcReceivedMessage) - 1,
+                                              portMAX_DELAY);
+
+        if (xMessageLength > 0) {
+            ulMessagesReceived++;
+
+            /* Null terminate for printing */
+            pcReceivedMessage[xMessageLength] = '\0';
+
+            printf("Message Receiver: Received message (Length: %u, Total: %lu): %s\r\n",
+                   (unsigned int)xMessageLength, ulMessagesReceived, pcReceivedMessage);
+
+            /* Toggle red LED to show activity */
+            HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_14);
+        }
+    }
+}
 
 /* USER CODE END 4 */
 
@@ -283,7 +395,6 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
   }
   /* USER CODE END 5 */
 }

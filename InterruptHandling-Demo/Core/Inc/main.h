@@ -26,11 +26,22 @@
 extern "C" {
 #endif
 
-/* Includes ------------------------------------------------------------------*/
-#include "stm32f4xx_hal.h"
+
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+/* Standard includes */
+#include <stdio.h>
+#include <string.h>
+
+/* STM32 HAL includes */
+#include "stm32f4xx_hal.h"
+
+
+/* FreeRTOS includes */
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h" /* For binary semaphore */
 
 /* USER CODE END Includes */
 
